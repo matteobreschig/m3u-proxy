@@ -19,8 +19,9 @@ services:
       - "5000:5000"
     environment:
       - SOURCE_PLAYLIST_URL=${SOURCE_PLAYLIST_URL}
-      - MEDIAFLOW_URL=${MEDIAFLOW_URL}
+      - MEDIAFLOW_URL=http://mediaflow-proxy-light:8888
       - MEDIAFLOW_PASSWORD=${MEDIAFLOW_PASSWORD}
       - CACHE_TTL_SECONDS=3600
+      - PLAYLIST_PASSWORD=${PLAYLIST_PASSWORD}
     depends_on:
       - mediaflow-proxy-light
