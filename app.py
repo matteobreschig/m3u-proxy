@@ -164,6 +164,13 @@ def convert_playlist(raw):
 def playlist():
     if not SOURCE_URL:
         return "SOURCE_PLAYLIST_URL not configured", 500
+
+    playlist_password = os.environ.get("PLAYLIST_PASSWORD", "")
+    if playlist_password:
+        token = request.args.get("token", "")
+        if token != playlist_password:
+            return "Unauthorized", 401
+
     try:
         raw = get_playlist()
         converted = convert_playlist(raw)
