@@ -82,9 +82,9 @@ def build_proxy_url(stream_url, stream_type, key_id=None, key=None, headers=None
 
     if stream_type == "dash":
         path = "/proxy/mpd/manifest.m3u8"
-        extra = ""
+        extra = "&audio_languages=ita,mul,eng"
         if key_id and key:
-            extra = f"&key_id={key_id}&key={key}"
+            extra += f"&key_id={key_id}&key={key}"
         return f"{base}{path}?d={encoded_url}{extra}{pwd}"
 
     elif stream_type == "hls":
