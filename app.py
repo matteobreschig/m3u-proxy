@@ -182,6 +182,10 @@ def convert_playlist(raw):
                     else:
                         watch_url = f"/watch/{slug}"
 
+                    playlist_password = os.environ.get("PLAYLIST_PASSWORD", "")
+                    if playlist_password:
+                        watch_url += f"?token={quote(playlist_password, safe='')}"
+
                     output.append(block_lines[0])
                     output.append(watch_url)
                 else:
