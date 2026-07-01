@@ -85,7 +85,7 @@ def extract_headers(block):
     return headers
 
 
-def build_proxy_url(stream_url, stream_type, key_id=None, key=None, headers=None):
+def build_proxy_url(stream_url, stream_type, key_id=None, key=None, headers=None, audio=None):
     """Build the MediaFlow proxy URL for a given stream."""
     base = MEDIAFLOW_URL.rstrip("/")
     encoded_url = quote(stream_url, safe="")
@@ -93,7 +93,7 @@ def build_proxy_url(stream_url, stream_type, key_id=None, key=None, headers=None
 
     if stream_type == "dash":
         path = "/proxy/mpd/manifest.m3u8"
-        extra = "&audio_languages=ita,mul,eng"
+        extra = f"&audio_languages={audio}" if audio else ""
         if key_id and key:
             extra += f"&key_id={key_id}&key={key}"
         return f"{base}{path}?d={encoded_url}{extra}{pwd}"
@@ -115,7 +115,7 @@ def build_proxy_url(stream_url, stream_type, key_id=None, key=None, headers=None
         return f"{base}{path}?d={encoded_url}{extra}{pwd}"
 
 
-def convert_playlist(raw):
+def convert_playlist(raw, audio=None):
     """Parse the M3U playlist, build channel index, and emit stable /watch URLs."""
     lines = raw.splitlines()
     output = []
@@ -175,6 +175,7 @@ def convert_playlist(raw):
                         "key": key,
                         "headers": headers,
                         "name": channel_name,
+                        "audio": audio,
                     }
 
                     if base_public:
@@ -183,8 +184,12 @@ def convert_playlist(raw):
                         watch_url = f"/watch/{slug}"
 
                     playlist_password = os.environ.get("PLAYLIST_PASSWORD", "")
+                    sep = "?" if "?" not in watch_url else "&"
                     if playlist_password:
-                        watch_url += f"?token={quote(playlist_password, safe='')}"
+                        watch_url += f"{sep}token={quote(playlist_password, safe='')}"
+                        sep = "&"
+                    if audio:
+                        watch_url += f"{sep}audio={quote(audio, safe='')}"
 
                     output.append(block_lines[0])
                     output.append(watch_url)
@@ -203,10 +208,10 @@ def convert_playlist(raw):
     return "\n".join(output)
 
 
-def ensure_index(ttl=None):
+def ensure_index(ttl=None, audio=None):
     """Make sure _channel_index is populated (parses playlist if needed)."""
     raw = get_playlist(ttl=ttl)
-    convert_playlist(raw)
+    convert_playlist(raw, audio=audio)
 
 
 @app.route("/watch/<slug>")
@@ -218,14 +223,18 @@ def watch(slug):
         if token != playlist_password:
             return "Unauthorized", 401
 
-    ensure_index(ttl=WATCH_CACHE_TTL)
+    audio = request.args.get("audio")
+
+    ensure_index(ttl=WATCH_CACHE_TTL, audio=audio)
 
     entry = _channel_index.get(slug)
     if not entry:
         return f"Channel '{slug}' not found", 404
 
+    effective_audio = audio or entry.get("audio")
+
     proxy_url = build_proxy_url(
-        entry["url"], entry["type"], entry["key_id"], entry["key"], entry["headers"]
+        entry["url"], entry["type"], entry["key_id"], entry["key"], entry["headers"], audio=effective_audio
     )
     return redirect(proxy_url, code=302)
 
@@ -242,8 +251,9 @@ def playlist():
             return "Unauthorized", 401
 
     try:
+        audio = request.args.get("audio")
         raw = get_playlist()
-        converted = convert_playlist(raw)
+        converted = convert_playlist(raw, audio=audio)
         return Response(converted, mimetype="application/x-mpegurl")
     except Exception as e:
         logger.error(f"Error: {e}")
