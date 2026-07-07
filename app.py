@@ -19,6 +19,8 @@ CACHE_TTL = int(os.environ.get("CACHE_TTL_SECONDS", "3600"))
 WATCH_CACHE_TTL = int(os.environ.get("WATCH_CACHE_TTL_SECONDS", "300"))
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "")  # es. http://breschi.asuscomm.com:5000
 
+FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "/usr/bin/ffmpeg")
+
 # In-memory cache
 _cache = {"content": None, "timestamp": 0}
 # Slug -> parsed channel info (rebuilt every time playlist is parsed)
@@ -145,8 +147,14 @@ def build_proxy_url(stream_url, stream_type, key_id=None, key=None, headers=None
         return f"{base}{path}?d={encoded_url}{extra}{pwd}"
 
 
-def convert_playlist(raw, audio=None):
-    """Parse the M3U playlist, build channel index, and emit stable /watch URLs."""
+def convert_playlist(raw, audio=None, ffmpeg_pipe=False):
+    """Parse the M3U playlist, build channel index, and emit stable /watch URLs.
+
+    Se ffmpeg_pipe=True, ogni riga canale viene emessa come comando
+    pipe://ffmpeg (per client come TVHeadend che non gestiscono bene
+    HLS multi-variante con audio su traccia separata). Se False, viene
+    emesso l'URL /watch/<slug> "pulito" (per VLC, altri player, ecc.).
+    """
     lines = raw.splitlines()
     output = []
     i = 0
@@ -222,7 +230,18 @@ def convert_playlist(raw, audio=None):
                         watch_url += f"{sep}audio={quote(audio, safe='')}"
 
                     output.append(block_lines[0])
-                    output.append(watch_url)
+
+                    if ffmpeg_pipe:
+                        # ffmpeg segue l'HLS multi-variante, seleziona la
+                        # variante, unisce audio+video e restituisce MPEG-TS
+                        # grezzo su stdout: e' cio' che TVHeadend sa leggere.
+                        pipe_cmd = (
+                            f'pipe://{FFMPEG_PATH} -loglevel error -i "{watch_url}" '
+                            f'-map 0 -c copy -f mpegts pipe:1'
+                        )
+                        output.append(pipe_cmd)
+                    else:
+                        output.append(watch_url)
                 else:
                     output.extend(block_lines)
             else:
@@ -238,10 +257,10 @@ def convert_playlist(raw, audio=None):
     return "\n".join(output)
 
 
-def ensure_index(ttl=None, audio=None):
+def ensure_index(ttl=None, audio=None, ffmpeg_pipe=False):
     """Make sure _channel_index is populated (parses playlist if needed)."""
     raw = get_playlist(ttl=ttl)
-    convert_playlist(raw, audio=audio)
+    convert_playlist(raw, audio=audio, ffmpeg_pipe=ffmpeg_pipe)
 
 
 @app.route("/watch/<slug>")
@@ -294,6 +313,19 @@ def watch(slug):
 
 @app.route("/playlist.m3u")
 def playlist():
+    """Playlist 'pulita': ogni canale e' un URL /watch/<slug> diretto.
+    Adatta per VLC, altri player, o per ispezionare/debuggare i canali."""
+    return _build_playlist_response(ffmpeg_pipe=False)
+
+
+@app.route("/playlist-tvh.m3u")
+def playlist_tvh():
+    """Playlist per TVHeadend: ogni canale e' un comando pipe://ffmpeg
+    che segue l'HLS multi-variante e unisce audio+video in MPEG-TS."""
+    return _build_playlist_response(ffmpeg_pipe=True)
+
+
+def _build_playlist_response(ffmpeg_pipe):
     if not SOURCE_URL:
         return "SOURCE_PLAYLIST_URL not configured", 500
 
@@ -306,7 +338,7 @@ def playlist():
     try:
         audio = request.args.get("audio")
         raw = get_playlist()
-        converted = convert_playlist(raw, audio=audio)
+        converted = convert_playlist(raw, audio=audio, ffmpeg_pipe=ffmpeg_pipe)
         return Response(converted, mimetype="application/x-mpegurl")
     except Exception as e:
         logger.error(f"Error: {e}")
