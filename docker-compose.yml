@@ -11,6 +11,8 @@ services:
       - APP__SERVER__PORT=8888
       - APP__AUTH__API_PASSWORD=${MEDIAFLOW_PASSWORD}
       - APP__MPD__REMUX_TO_TS=true
+      - APP__MPD__LIVE_INIT_CACHE_TTL=${MEDIAFLOW_MPD_LIVE_INIT_CACHE_TTL}
+      - APP__LOG_LEVEL=debug
 
   m3u-proxy:
     build: .
