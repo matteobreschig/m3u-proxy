@@ -1,19 +1,13 @@
 services:
-
   mediaflow-proxy-light:
-    image: ghcr.io/mhdzumair/mediaflow-proxy-light:latest
-    container_name: mediaflow-proxy-light
+    image: mhdzumair/mediaflow-proxy
+    container_name: mediaflow-proxy
     restart: unless-stopped
     ports:
       - "8888:8888"
     environment:
-      - APP__SERVER__HOST=0.0.0.0
-      - APP__SERVER__PORT=8888
-      - APP__AUTH__API_PASSWORD=${MEDIAFLOW_PASSWORD}
-      - APP__MPD__REMUX_TO_TS=true
-      - APP__MPD__LIVE_INIT_CACHE_TTL=${MEDIAFLOW_MPD_LIVE_INIT_CACHE_TTL}
-      - APP__LOG_LEVEL=debug
-
+      - API_PASSWORD=${MEDIAFLOW_PASSWORD}
+      - MPD_LIVE_STREAM_DELAY=30
   m3u-proxy:
     build: .
     container_name: m3u-proxy
