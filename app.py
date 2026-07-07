@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import time
 import logging
 import requests
@@ -60,14 +61,39 @@ def detect_stream_type(url, extinf_block):
 
 
 def extract_clearkey(block):
-    """Extract ClearKey kid:key from KODIPROP lines."""
-    match = re.search(
-        r"#KODIPROP:inputstream\.adaptive\.license_key=([a-f0-9]{32}):([a-f0-9]{32})",
-        block,
-        re.IGNORECASE,
-    )
-    if match:
-        return match.group(1), match.group(2)
+    """Extract ClearKey kid:key (single or multi-key) from KODIPROP lines.
+
+    Supports both:
+      - classic hex format: license_key=<32hex>:<32hex>
+      - JSON/JWK multi-key format:
+        license_key={"keys":[{"kty":"oct","k":"...","kid":"..."}, ...],"type":"temporary"}
+
+    Returns (key_id, key), each possibly a comma-separated list for multi-key
+    streams (mediaflow-proxy natively supports this format and auto-normalizes
+    base64url/hex).
+    """
+    m = re.search(r"#KODIPROP:inputstream\.adaptive\.license_key=(.+)", block)
+    if not m:
+        return None, None
+    value = m.group(1).strip()
+
+    # JSON/JWK multi-key format
+    if value.startswith("{"):
+        try:
+            data = json.loads(value)
+            keys = data.get("keys", [])
+            pairs = [(k["kid"], k["k"]) for k in keys if "kid" in k and "k" in k]
+            if pairs:
+                return ",".join(p[0] for p in pairs), ",".join(p[1] for p in pairs)
+        except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+            logger.warning("Failed to parse JSON ClearKey license_key")
+        return None, None
+
+    # Classic hex kid:key format (single key)
+    hex_match = re.match(r"([a-f0-9]{32}):([a-f0-9]{32})", value, re.IGNORECASE)
+    if hex_match:
+        return hex_match.group(1), hex_match.group(2)
+
     return None, None
 
 
