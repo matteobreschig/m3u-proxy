@@ -86,13 +86,17 @@ def extract_clearkey(block):
             if pairs:
                 return ",".join(p[0] for p in pairs), ",".join(p[1] for p in pairs)
         except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
-            logger.warning("Failed to parse JSON ClearKey license_key")
-        return None, None
+            pass  # not valid JSON -> fall through to hex-pair parsing below
 
-    # Classic hex kid:key format (single key)
-    hex_match = re.match(r"([a-f0-9]{32}):([a-f0-9]{32})", value, re.IGNORECASE)
-    if hex_match:
-        return hex_match.group(1), hex_match.group(2)
+    # Hex kid:key pair(s). Handles the classic single-pair format
+    # (license_key=kid:key) as well as the curly-brace multi-pair format
+    # (license_key={kid1:key1,kid2:key2,...}) used for multi-key streams.
+    hex_pairs = re.findall(r"([a-f0-9]{32}):([a-f0-9]{32})", value, re.IGNORECASE)
+    if hex_pairs:
+        return (
+            ",".join(p[0] for p in hex_pairs),
+            ",".join(p[1] for p in hex_pairs),
+        )
 
     return None, None
 
