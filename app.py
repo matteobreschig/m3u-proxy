@@ -4,7 +4,7 @@ import json
 import time
 import logging
 import requests
-from flask import Flask, Response, request, redirect
+from flask import Flask, Response, request
 from urllib.parse import quote
 
 app = Flask(__name__)
@@ -246,7 +246,9 @@ def ensure_index(ttl=None, audio=None):
 
 @app.route("/watch/<slug>")
 def watch(slug):
-    """Stable short URL. Resolves to a fresh MediaFlow proxy URL on each request."""
+    """Stable URL. Fetches the real stream/manifest from MediaFlow and
+    passes it through directly (no HTTP redirect), so that clients like
+    TVHeadend that don't follow redirects well always get content back."""
     playlist_password = os.environ.get("PLAYLIST_PASSWORD", "")
     if playlist_password:
         token = request.args.get("token", "")
@@ -266,7 +268,28 @@ def watch(slug):
     proxy_url = build_proxy_url(
         entry["url"], entry["type"], entry["key_id"], entry["key"], entry["headers"], audio=effective_audio
     )
-    return redirect(proxy_url, code=302)
+
+    try:
+        upstream = requests.get(proxy_url, stream=True, timeout=15)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Errore nel contattare MediaFlow per '{slug}': {e}")
+        return f"Upstream error: {e}", 502
+
+    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
+
+    def generate():
+        try:
+            for chunk in upstream.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return Response(
+        generate(),
+        status=upstream.status_code,
+        content_type=content_type,
+    )
 
 
 @app.route("/playlist.m3u")
