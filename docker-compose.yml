@@ -1,5 +1,5 @@
 services:
-  mediaflow-proxy-light:
+  mediaflow-proxy:
     image: mhdzumair/mediaflow-proxy
     container_name: mediaflow-proxy
     restart: unless-stopped
@@ -8,6 +8,8 @@ services:
     environment:
       - API_PASSWORD=${MEDIAFLOW_PASSWORD}
       - MPD_LIVE_STREAM_DELAY=30
+      - DASH_SEGMENT_CACHE_TTL=${MEDIAFLOW_MPD_LIVE_INIT_CACHE_TTL}
+      - REMUX_TO_TS=true
   m3u-proxy:
     build: .
     container_name: m3u-proxy
@@ -23,4 +25,4 @@ services:
       - PLAYLIST_PASSWORD=${PLAYLIST_PASSWORD}
       - PUBLIC_URL=${PUBLIC_URL}
     depends_on:
-      - mediaflow-proxy-light
+      - mediaflow-proxy
