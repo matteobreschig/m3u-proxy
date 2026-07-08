@@ -8,7 +8,6 @@ services:
     environment:
       - API_PASSWORD=${MEDIAFLOW_PASSWORD}
       - MPD_LIVE_STREAM_DELAY=30
-      - REMUX_TO_TS=true
   m3u-proxy:
     build: .
     container_name: m3u-proxy
