@@ -126,13 +126,6 @@ def build_proxy_url(stream_url, stream_type, key_id=None, key=None, headers=None
         extra = f"&audio_languages={audio}" if audio else ""
         if key_id and key:
             extra += f"&key_id={quote(key_id, safe=',')}&key={quote(key, safe=',')}"
-            # Multi-key ClearKey (audio+video separate keys) has shown container/
-            # decoding issues with some strict native players (e.g. Samsung Tizen
-            # AVPlay) when served as passthrough fMP4. Forcing a real remux to
-            # MPEG-TS for these channels rebuilds the container from scratch and
-            # avoids the issue, without touching single-key channels.
-            if "," in key_id:
-                extra += "&remux_to_ts=true"
         return f"{base}{path}?d={encoded_url}{extra}{pwd}"
 
     elif stream_type == "hls":
