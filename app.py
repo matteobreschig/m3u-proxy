@@ -4,7 +4,7 @@ import json
 import time
 import logging
 import requests
-from flask import Flask, Response, request
+from flask import Flask, Response, request, redirect
 from urllib.parse import quote
 
 app = Flask(__name__)
@@ -18,8 +18,6 @@ MEDIAFLOW_PASSWORD = os.environ.get("MEDIAFLOW_PASSWORD", "")
 CACHE_TTL = int(os.environ.get("CACHE_TTL_SECONDS", "3600"))
 WATCH_CACHE_TTL = int(os.environ.get("WATCH_CACHE_TTL_SECONDS", "300"))
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "")  # es. http://breschi.asuscomm.com:5000
-
-FFMPEG_PATH = os.environ.get("FFMPEG_PATH", "/usr/bin/ffmpeg")
 
 # In-memory cache
 _cache = {"content": None, "timestamp": 0}
@@ -128,6 +126,13 @@ def build_proxy_url(stream_url, stream_type, key_id=None, key=None, headers=None
         extra = f"&audio_languages={audio}" if audio else ""
         if key_id and key:
             extra += f"&key_id={quote(key_id, safe=',')}&key={quote(key, safe=',')}"
+            # Multi-key ClearKey (audio+video separate keys) has shown container/
+            # decoding issues with some strict native players (e.g. Samsung Tizen
+            # AVPlay) when served as passthrough fMP4. Forcing a real remux to
+            # MPEG-TS for these channels rebuilds the container from scratch and
+            # avoids the issue, without touching single-key channels.
+            if "," in key_id:
+                extra += "&remux_to_ts=true"
         return f"{base}{path}?d={encoded_url}{extra}{pwd}"
 
     elif stream_type == "hls":
@@ -147,14 +152,8 @@ def build_proxy_url(stream_url, stream_type, key_id=None, key=None, headers=None
         return f"{base}{path}?d={encoded_url}{extra}{pwd}"
 
 
-def convert_playlist(raw, audio=None, ffmpeg_pipe=False):
-    """Parse the M3U playlist, build channel index, and emit stable /watch URLs.
-
-    Se ffmpeg_pipe=True, ogni riga canale viene emessa come comando
-    pipe://ffmpeg (per client come TVHeadend che non gestiscono bene
-    HLS multi-variante con audio su traccia separata). Se False, viene
-    emesso l'URL /watch/<slug> "pulito" (per VLC, altri player, ecc.).
-    """
+def convert_playlist(raw, audio=None):
+    """Parse the M3U playlist, build channel index, and emit stable /watch URLs."""
     lines = raw.splitlines()
     output = []
     i = 0
@@ -230,18 +229,7 @@ def convert_playlist(raw, audio=None, ffmpeg_pipe=False):
                         watch_url += f"{sep}audio={quote(audio, safe='')}"
 
                     output.append(block_lines[0])
-
-                    if ffmpeg_pipe:
-                        # ffmpeg segue l'HLS multi-variante, seleziona la
-                        # variante, unisce audio+video e restituisce MPEG-TS
-                        # grezzo su stdout: e' cio' che TVHeadend sa leggere.
-                        pipe_cmd = (
-                            f'pipe://{FFMPEG_PATH} -loglevel error -i "{watch_url}" '
-                            f'-map 0 -c copy -f mpegts pipe:1'
-                        )
-                        output.append(pipe_cmd)
-                    else:
-                        output.append(watch_url)
+                    output.append(watch_url)
                 else:
                     output.extend(block_lines)
             else:
@@ -257,17 +245,15 @@ def convert_playlist(raw, audio=None, ffmpeg_pipe=False):
     return "\n".join(output)
 
 
-def ensure_index(ttl=None, audio=None, ffmpeg_pipe=False):
+def ensure_index(ttl=None, audio=None):
     """Make sure _channel_index is populated (parses playlist if needed)."""
     raw = get_playlist(ttl=ttl)
-    convert_playlist(raw, audio=audio, ffmpeg_pipe=ffmpeg_pipe)
+    convert_playlist(raw, audio=audio)
 
 
 @app.route("/watch/<slug>")
 def watch(slug):
-    """Stable URL. Fetches the real stream/manifest from MediaFlow and
-    passes it through directly (no HTTP redirect), so that clients like
-    TVHeadend that don't follow redirects well always get content back."""
+    """Stable short URL. Resolves to a fresh MediaFlow proxy URL on each request."""
     playlist_password = os.environ.get("PLAYLIST_PASSWORD", "")
     if playlist_password:
         token = request.args.get("token", "")
@@ -287,45 +273,11 @@ def watch(slug):
     proxy_url = build_proxy_url(
         entry["url"], entry["type"], entry["key_id"], entry["key"], entry["headers"], audio=effective_audio
     )
-
-    try:
-        upstream = requests.get(proxy_url, stream=True, timeout=15)
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Errore nel contattare MediaFlow per '{slug}': {e}")
-        return f"Upstream error: {e}", 502
-
-    content_type = upstream.headers.get("Content-Type", "application/octet-stream")
-
-    def generate():
-        try:
-            for chunk in upstream.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-        finally:
-            upstream.close()
-
-    return Response(
-        generate(),
-        status=upstream.status_code,
-        content_type=content_type,
-    )
+    return redirect(proxy_url, code=302)
 
 
 @app.route("/playlist.m3u")
 def playlist():
-    """Playlist 'pulita': ogni canale e' un URL /watch/<slug> diretto.
-    Adatta per VLC, altri player, o per ispezionare/debuggare i canali."""
-    return _build_playlist_response(ffmpeg_pipe=False)
-
-
-@app.route("/playlist-tvh.m3u")
-def playlist_tvh():
-    """Playlist per TVHeadend: ogni canale e' un comando pipe://ffmpeg
-    che segue l'HLS multi-variante e unisce audio+video in MPEG-TS."""
-    return _build_playlist_response(ffmpeg_pipe=True)
-
-
-def _build_playlist_response(ffmpeg_pipe):
     if not SOURCE_URL:
         return "SOURCE_PLAYLIST_URL not configured", 500
 
@@ -338,7 +290,7 @@ def _build_playlist_response(ffmpeg_pipe):
     try:
         audio = request.args.get("audio")
         raw = get_playlist()
-        converted = convert_playlist(raw, audio=audio, ffmpeg_pipe=ffmpeg_pipe)
+        converted = convert_playlist(raw, audio=audio)
         return Response(converted, mimetype="application/x-mpegurl")
     except Exception as e:
         logger.error(f"Error: {e}")
